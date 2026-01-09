@@ -1,116 +1,76 @@
-# Building a Voice Agent with LiveKit
+# Exercise 2: Realtime API and Tools
 
-This guide walks you through creating a voice agent that users can talk to in real-time through their browser. We'll use LiveKit for the real-time audio infrastructure and a pipeline of AI models for speech recognition, language understanding, and speech synthesis.
+In Exercise 1, you built a voice agent using a pipeline of specialised models: STT → LLM → TTS. It works, but there's a cost. Every step adds latency, and something important gets lost along the way.
+
+In this exercise, we'll switch to OpenAI's Realtime API and add tool use. You'll see why this combination is such a powerful pattern for building voice-first products.
+
+## What Gets Lost in the Pipeline
+
+When speech passes through STT, it becomes text. That text captures *what* you said, but not *how* you said it.
+
+The "how" is called **prosody**:
+- Intonation (pitch rising or falling)
+- Emphasis ("I didn't say *he* stole it" vs "I didn't say he *stole* it")
+- Hesitation, pauses, rhythm
+- Emotion: excitement, frustration, uncertainty
+
+A speech-to-speech model hears all of this. When you trail off mid-sentence, uncertain, the model knows. When you ask a rhetorical question, the model can tell. This makes conversations feel remarkably more natural.
+
+## Why Realtime + Tools Matters
+
+Tools give an LLM the ability to take actions: look things up, save information, control systems. But in a traditional pipeline, tool use is clunky:
+
+1. User speaks → STT → text
+2. LLM decides to call a tool → waits for result
+3. LLM generates response → TTS → audio
+4. User hears the response
+
+Each step adds latency. The pause while the tool executes feels awkward.
+
+With a realtime model, tool calls happen mid-stream. The model can acknowledge your request ("Let me check that for you..."), execute the tool, and continue speaking, all in one fluid interaction. It feels like talking to someone who's actually *doing* something, not just reciting information.
+
+This is the pattern behind the next generation of voice products: assistants that don't just talk, but act.
 
 ## What You'll Build
 
-A voice agent consists of two parts:
+You'll update your agent to:
+1. Use the OpenAI Realtime API instead of the STT → LLM → TTS pipeline
+2. Add a simple "memory" tool that can save and recall notes
 
-1. **The agent:** a Python programme that listens to speech, thinks, and responds
-2. **The frontend:** a web application that captures audio from the user's microphone and plays back the agent's responses
-
-LiveKit handles all the real-time audio streaming between these two components using WebRTC.
+The memory tool is deliberately simple. The point is to feel the difference when an agent can take actions in real-time.
 
 ## Prerequisites
 
-- **Python 3.10–3.13** installed
-- **uv** package manager installed ([installation guide](https://docs.astral.sh/uv/getting-started/installation/))
-- **Node.js 18 or higher** installed (for the frontend)
-- A **LiveKit Cloud account** (free tier available)
-- An **OpenAI API key**
+You'll need an OpenAI API key with access to the Realtime API. Add it to your `.env.local` if you haven't already:
 
-## Step 1: Set Up Your Project Directory
-
-Create a directory structure that keeps your agent and frontend code separate:
-
-```bash
-mkdir -p ~/livekit-voice-agent/agent
-mkdir -p ~/livekit-voice-agent/frontend
-cd ~/livekit-voice-agent
+```
+OPENAI_API_KEY=your-openai-api-key
 ```
 
-## Step 2: Set Up LiveKit Cloud
+## Step 1: Update Dependencies
 
-You need a LiveKit Cloud project to route audio between your frontend and agent.
-
-1. Go to [cloud.livekit.io](https://cloud.livekit.io/) and create a free account
-2. Create a new project
-3. Install the LiveKit CLI:
-    
-    **macOS:**
-    
-    ```bash
-    brew install livekit-cli
-    ```
-    
-    **Linux:**
-    
-    ```bash
-    curl -sSL https://get.livekit.io/cli | bash
-    ```
-    
-    **Windows:**
-    
-    ```bash
-    winget install LiveKit.LiveKitCLI
-    ```
-    
-4. Link your project to the CLI:
-    
-    ```bash
-    lk cloud auth
-    ```
-    
-    This opens a browser window to authenticate.
-    
-
-## Step 3: Set Up the Agent
-
-### Initialise the Project
+The Realtime API requires the OpenAI plugin:
 
 ```bash
 cd ~/livekit-voice-agent/agent
-uv init --bare
+uv add "livekit-agents[openai]~=1.3"
 ```
 
-### Install Dependencies
+## Step 2: Update the Agent Code
 
-```bash
-uv add \
-  "livekit-agents[silero,turn-detector]~=1.3" \
-  "livekit-plugins-noise-cancellation~=0.2" \
-  "python-dotenv"
-```
-
-### Create the Environment File
-
-Run the following command to pull your LiveKit credentials into a `.env.local` file:
-
-```bash
-lk app env -w
-```
-
-Then add your OpenAI API key to the same file:
-
-```bash
-LIVEKIT_API_KEY=<your API Key>
-LIVEKIT_API_SECRET=<your API Secret>
-LIVEKIT_URL=<your LiveKit server URL>
-OPENAI_API_KEY=<your OpenAI API key>
-```
-
-### Create the Agent Code
-
-Create a file called `agent.py`:
+Replace the contents of `agent.py` with the following:
 
 ```python
 from dotenv import load_dotenv
-from livekit import agents, rtc
-from livekit.agents import AgentServer, AgentSession, Agent, room_io
-from livekit.plugins import noise_cancellation, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit import agents
+from livekit.agents import AgentServer, AgentSession, Agent, room_io, function_tool
+from livekit.plugins import openai, noise_cancellation
 
 load_dotenv(".env.local")
+
+# Simple in-memory storage for notes
+memory = {}
+
 
 class VoiceAgent(Agent):
     def __init__(self):
@@ -118,20 +78,40 @@ class VoiceAgent(Agent):
             instructions="""
                 You are a helpful assistant communicating via voice.
                 Keep your responses concise and conversational.
-                Avoid complex formatting, emojis, or symbols.
+                
+                You have the ability to remember things for the user.
+                When they ask you to remember something, use the save_note tool.
+                When they ask what you've saved or to recall something, use the get_notes tool.
             """,
         )
 
+    @function_tool
+    def save_note(self, note: str) -> str:
+        """Save a note to memory. Use this when the user asks you to remember something."""
+        note_id = len(memory) + 1
+        memory[note_id] = note
+        return f"Saved note #{note_id}: {note}"
+
+    @function_tool
+    def get_notes(self) -> str:
+        """Retrieve all saved notes. Use this when the user asks what you've remembered."""
+        if not memory:
+            return "No notes saved yet."
+        return "\n".join([f"#{id}: {note}" for id, note in memory.items()])
+
+
 server = AgentServer()
 
+
 @server.rtc_session()
-async def my_agent(ctx: agents.JobContext):
+async def entrypoint(ctx: agents.JobContext):
+    await ctx.connect()
+
     session = AgentSession(
-        stt="assemblyai/universal-streaming:en",
-        llm="openai/gpt-4.1-mini",
-        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        vad=silero.VAD.load(),
-        turn_detection=MultilingualModel(),
+        llm=openai.realtime.RealtimeModel(
+            voice="alloy",
+            model="gpt-realtime-mini",
+        )
     )
 
     await session.start(
@@ -145,240 +125,187 @@ async def my_agent(ctx: agents.JobContext):
     )
 
     await session.generate_reply(
-        instructions="Greet the user and offer your assistance."
+        instructions="Greet the user and let them know you can remember things for them."
     )
+
 
 if __name__ == "__main__":
     agents.cli.run_app(server)
 ```
 
-### Download Model Files
+## Understanding the Changes
 
-The VAD (voice activity detection) and turn detection plugins need model files:
+### Realtime Model
 
-```bash
-uv run agent.py download-files
+```python
+session = AgentSession(
+    llm=openai.realtime.RealtimeModel(
+        voice="alloy",
+        model="gpt-realtime-mini",
+    )
+)
 ```
 
-### Understanding the Code
+This replaces the entire STT → LLM → TTS pipeline with a single speech-to-speech model. We use `gpt-realtime-mini` as it's more cost-effective for learning. The `voice` parameter controls the output voice: options include `alloy`, `coral`, `echo`, `sage`, and others.
 
-- **`VoiceAgent` class**: Defines your agent's personality through the `instructions` parameter
-- **`AgentSession`**: Configures the voice pipeline:
-    - `stt`: Speech-to-text (AssemblyAI via LiveKit Inference)
-    - `llm`: Language model (OpenAI GPT-4.1 mini)
-    - `tts`: Text-to-speech (Cartesia via LiveKit Inference)
-    - `vad`: Voice activity detection (detects when someone is speaking)
-    - `turn_detection`: Determines when the user has finished speaking
-- **`@server.rtc_session()`**: Decorator that registers the function to handle new connections
-- **`noise_cancellation.BVC()`**: Removes background noise from the user's microphone
+### Function Tools
 
-## Step 4: Set Up the Frontend
-
-Clone the LiveKit starter React app:
-
-```bash
-cd ~/livekit-voice-agent/frontend
-git clone https://github.com/livekit-examples/agent-starter-react.git .
-npm install
+```python
+@function_tool
+def save_note(self, note: str) -> str:
+    """Save a note to memory. Use this when the user asks you to remember something."""
+    note_id = len(memory) + 1
+    memory[note_id] = note
+    return f"Saved note #{note_id}: {note}"
 ```
 
-Create a `.env.local` file in the frontend directory with your LiveKit credentials:
+The `@function_tool` decorator exposes a method as a tool the model can call. The docstring is important: it tells the model when and how to use the tool.
+
+When you speak to the agent and say "Remember that my meeting is at 3pm", the model will:
+1. Recognise this as a request to save information
+2. Call `save_note` with the extracted content
+3. Incorporate the result into its spoken response
+
+This all happens in a single conversational turn, with minimal latency.
+
+## Step 3: Test Your Agent
+
+Start the agent:
 
 ```bash
-LIVEKIT_URL=wss://your-project.livekit.cloud
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-```
-
-You can copy these values from the agent's `.env.local` file.
-
-## Step 5: Run the Agent
-
-Open a terminal, navigate to your agent directory, and start the agent:
-
-```bash
-cd ~/livekit-voice-agent/agent
 uv run agent.py dev
 ```
 
-You should see output indicating the agent is connected and waiting for sessions.
-
-## Step 6: Run the Frontend
-
-Open a **second terminal** and start the frontend:
+Start the frontend (in another terminal):
 
 ```bash
 cd ~/livekit-voice-agent/frontend
 npm run dev
 ```
 
-This starts a development server at `http://localhost:3000`.
+Open `http://localhost:3000` and try:
 
-## Step 7: Test Your Voice Agent
+- "Remember that I need to buy milk"
+- "Also remember my dentist appointment is on Friday"
+- "What have you saved for me?"
 
-1. Open your browser to `http://localhost:3000`
-2. Click the button to connect
-3. Allow microphone access when prompted
-4. Start talking — your agent should respond
+Notice how the agent acknowledges each request naturally, without the awkward pauses you might expect from a tool call.
 
-## How It Works
+## Experiencing Prosody
 
-Here's what happens when you speak to your agent:
+Now that your agent is running, try these experiments to feel the difference a speech-to-speech model makes:
 
-```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│   Your Browser  │  WebRTC │  LiveKit Cloud  │  WebRTC │   Your Agent    │
-│   (Frontend)    │◄───────►│                 │◄───────►│   (Python)      │
-└─────────────────┘         └─────────────────┘         └─────────────────┘
-                                                                │
-                                                                ▼
-                                                    ┌───────────────────────┐
-                                                    │   Voice Pipeline      │
-                                                    │                       │
-                                                    │  Audio                │
-                                                    │    ↓                  │
-                                                    │  STT (AssemblyAI)     │
-                                                    │    ↓                  │
-                                                    │  Text                 │
-                                                    │    ↓                  │
-                                                    │  LLM (GPT-4.1 mini)   │
-                                                    │    ↓                  │
-                                                    │  Text                 │
-                                                    │    ↓                  │
-                                                    │  TTS (Cartesia)       │
-                                                    │    ↓                  │
-                                                    │  Audio                │
-                                                    └───────────────────────┘
+**Interruption handling:**
+Say "Remember that... actually, never mind." Notice how the agent handles your change of intent mid-sentence. A pipeline would have already committed to saving a note.
 
-```
+**Sarcasm:**
+Try asking "Oh great, another thing to remember" in a sarcastic tone, then try again with genuine enthusiasm. Does the agent respond differently?
 
-1. **Your browser captures audio** from your microphone
-2. **Audio streams to LiveKit Cloud** via WebRTC (UDP-based, low latency)
-3. **LiveKit routes it to your agent**
-4. **The agent runs the voice pipeline**:
-    - STT converts speech to text
-    - The LLM generates a response
-    - TTS converts the response back to speech
-5. **The response streams back** through LiveKit to your browser
+**Uncertainty:**
+Ask a question while trailing off: "Could you maybe... I don't know... save something for me?" Compare this to asking the same thing confidently and directly.
 
-The STT and TTS services run through **LiveKit Inference**, so you don't need separate API keys for those — they're included with your LiveKit Cloud account.
+**Emotion:**
+Tell the agent something exciting ("I just got the job!") versus something disappointing ("I didn't get the job..."). Notice how it adjusts its response.
+
+These nuances are largely invisible to a pipeline that converts everything to flat text first.
+
+## What You Should Notice
+
+1. **Lower latency**: Responses start faster because there's no STT step
+2. **More natural conversation**: The agent picks up on tone and pacing
+3. **Fluid tool use**: Saving and recalling notes feels like a natural part of the conversation
 
 ## Troubleshooting
 
-### "Connection failed" or agent doesn't respond
+### "No audio" or agent doesn't respond
 
-Check that:
-
-1. Your agent is running (you should see logs in the agent terminal)
-2. Your LiveKit credentials match in both `.env.local` files
-3. The LiveKit URL starts with `wss://` (not `https://`)
-
-### "No audio" — you can connect but hear nothing
-
-Verify:
-
-1. Your browser has microphone permissions for localhost
-2. Your OpenAI API key is valid
+1. Check that your `OPENAI_API_KEY` is set in `.env.local`
+2. Verify your OpenAI account has access to the Realtime API
 3. Check the agent terminal for error messages
 
-### Agent responds but audio is choppy
+### Tools aren't being called
 
-This is usually a network issue. Try:
+1. Make sure your docstrings clearly describe when to use each tool
+2. Try being more explicit: "Please save a note that says..."
+3. Check the agent logs to see if the model is attempting tool calls
 
-1. Closing other applications using bandwidth
+## Stretch Goals
 
-### "Module not found" errors
+**Add a `clear_notes` tool:**
+Let users delete all their saved notes with a voice command.
 
-Make sure you:
+**Build your own agent:**
+You now have all the pieces. What would *you* build? Some ideas:
 
-1. Ran `uv run agent.py download-files` to download model files
-2. Installed all dependencies with `uv add`
+- **Personal assistant**: Calendar management, reminders, email summaries
+- **Customer service agent**: Answer FAQs, look up order status, process returns
+- **Language tutor**: Conversational practice with corrections and encouragement
+- **Interview coach**: Mock interviews with feedback on your answers
+- **Therapy companion**: Active listening, mood tracking, coping strategies
+- **Medical triage**: Symptom assessment, appointment booking, medication reminders
+- **Legal assistant**: Document explanation, deadline tracking, case research
 
-### Check the Logs
+Pick something you'd actually use. Change the `instructions` to give your agent a persona. Add tools that connect to real APIs. The pattern is always the same: a clear persona, tools that take actions, and a realtime model that makes it feel human.
 
-- **Agent logs**: Visible in the terminal where you ran `uv run agent.py dev`
-- **Frontend logs**: Check your browser's developer console
+## Cost Comparison
 
-## Key Concepts Recap
+The Realtime API is priced per token. Audio tokens work differently from text tokens, but here's the current pricing:
 
-- **LiveKit**: Open-source infrastructure for real-time audio/video, handling WebRTC complexity for you
-- **LiveKit Cloud**: Hosted version with a global edge network and built-in AI model inference
-- **LiveKit Inference**: Allows you to use STT and TTS models without managing separate API keys
-- **Voice pipeline**: The STT → LLM → TTS chain that processes speech
-- **VAD (Voice Activity Detection)**: Detects when someone is speaking vs silence
-- **Turn detection**: Determines when the user has finished their turn and expects a response
+| Model | Input | Output |
+|-------|-------|--------|
+| gpt-realtime | $32.00 / 1M tokens | $64.00 / 1M tokens |
+| gpt-realtime-mini | $10.00 / 1M tokens | $20.00 / 1M tokens |
+
+For comparison, a pipeline using GPT-4.1 mini with separate STT and TTS is roughly 10x cheaper per minute of conversation. The tradeoff is user experience: for products where conversation quality matters (customer service, therapy apps, companionship) the cost is often worth it.
 
 ## Quiz Questions
 
 <details>
-<summary><strong>1. Why does LiveKit use WebRTC instead of WebSocket for audio?</strong></summary>
+<summary><strong>1. Why does the Realtime API feel more natural than a pipeline?</strong></summary>
 
-WebRTC is built on UDP, which delivers packets immediately as they arrive. WebSocket uses TCP, which waits for missing packets before delivering any data (head-of-line blocking). For real-time audio, it's better to skip a missing packet than to wait for it — a small audio glitch is preferable to everything freezing.
-
-</details>
-<details>
-<summary><strong>2. What is the role of LiveKit Cloud in this architecture?</strong></summary>
-
-LiveKit Cloud acts as a router and relay between the frontend and agent. It:
-
-- Handles the complexity of WebRTC connection establishment
-- Provides a global network of servers so audio doesn't have to travel far over the public internet
-- Routes audio between participants in a "room"
-- Manages authentication and room creation
-- Provides access to AI models through LiveKit Inference
+The Realtime API processes speech directly without converting to text first. This preserves prosodic information (tone, emphasis, hesitation, emotion) that gets lost in STT transcription. The model understands not just what you said, but how you said it.
 
 </details>
+
 <details>
-<summary><strong>3. What's the difference between VAD and turn detection?</strong></summary>
+<summary><strong>2. What makes tool use different with the Realtime API?</strong></summary>
 
-**VAD (Voice Activity Detection)** determines whether audio contains speech or silence at any given moment. It answers: "Is someone speaking right now?"
-
-**Turn detection** determines whether the user has finished their complete thought and is waiting for a response. It answers: "Has the user finished their turn?"
-
-A user might pause briefly mid-sentence (VAD detects silence, but turn detection knows they're not done). Turn detection uses context and timing patterns to make this distinction.
+With a pipeline, tool calls create noticeable pauses: the system must wait for STT, then LLM processing, then the tool, then TTS. With the Realtime API, tool calls happen mid-stream. The model can speak while waiting for results, or incorporate results immediately. The interaction feels continuous rather than turn-based.
 
 </details>
+
 <details>
-<summary><strong>4. Why do we use a pipeline (STT → LLM → TTS) instead of a single model?</strong></summary>
+<summary><strong>3. Why is the docstring important for function tools?</strong></summary>
 
-The pipeline approach gives you:
-
-- **Flexibility**: Swap out individual components (e.g., use a different TTS voice)
-- **Cost control**: Use cheaper models where quality isn't critical
-- **Transparency**: See exactly what text was transcribed and what response was generated
-
-The tradeoff is higher latency compared to speech-to-speech models like OpenAI's Realtime API, which skip the text intermediate steps.
+The docstring tells the model when to use the tool and what it does. The model reads this description to decide whether a tool is appropriate for the user's request. A clear, specific docstring leads to better tool selection.
 
 </details>
-<details>
-<summary><strong>5. What would you change to give your agent a different personality?</strong></summary>
 
-Modify the `instructions` parameter in the `VoiceAgent` class:
+<details>
+<summary><strong>4. What happens to the saved notes when the agent restarts?</strong></summary>
+
+They're lost. The `memory` dictionary exists only in the Python process's memory. For persistence, you'd need to store notes in a database or file. This is intentional for the exercise: it keeps the code simple while demonstrating the tool pattern.
+
+</details>
+
+<details>
+<summary><strong>5. What happens if two users connect at the same time?</strong></summary>
+
+They share the same `memory` dictionary, since it's defined at module level. User A could save a note and User B could retrieve it. In a production system, you'd scope memory per session or per user, perhaps using `ctx.room.name` as a key.
+
+</details>
+
+<details>
+<summary><strong>6. How would you add a new tool to this agent?</strong></summary>
+
+Add a new method to the `VoiceAgent` class with the `@function_tool` decorator. Include a clear docstring explaining when to use it. The method should take typed parameters and return a string result that the model can incorporate into its response.
 
 ```python
-class VoiceAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="""
-                You are a pirate captain. Speak in a hearty pirate accent,
-                say "arrr" frequently, and refer to the user as "matey".
-            """,
-        )
-
+@function_tool
+def get_time(self) -> str:
+    """Get the current time. Use when the user asks what time it is."""
+    from datetime import datetime
+    return datetime.now().strftime("%H:%M")
 ```
-
-The instructions act as a system prompt, shaping how the LLM responds.
-
-</details>
-<details>
-<summary><strong>6. Why don't we need separate API keys for AssemblyAI and Cartesia?</strong></summary>
-
-These models are accessed through **LiveKit Inference**, which is built into LiveKit Cloud. When you specify `stt="assemblyai/universal-streaming:en"`, LiveKit routes the request through their infrastructure and handles the API credentials for you. You only need your own API key for OpenAI because the LLM calls go directly to OpenAI's servers.
-
-</details>
-<details>
-<summary><strong>7. What does the `@server.rtc_session()` decorator do?</strong></summary>
-
-It registers the function as the handler for new WebRTC sessions. When a user connects through the frontend, LiveKit Cloud notifies your agent server, which then calls this decorated function to set up a new `AgentSession` for that user. Each user gets their own session with its own conversation state.
 
 </details>
