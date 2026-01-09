@@ -86,14 +86,14 @@ class VoiceAgent(Agent):
         )
 
     @function_tool
-    def save_note(self, note: str) -> str:
+    async def save_note(self, note: str) -> str:
         """Save a note to memory. Use this when the user asks you to remember something."""
         note_id = len(memory) + 1
         memory[note_id] = note
         return f"Saved note #{note_id}: {note}"
 
     @function_tool
-    def get_notes(self) -> str:
+    async def get_notes(self) -> str:
         """Retrieve all saved notes. Use this when the user asks what you've remembered."""
         if not memory:
             return "No notes saved yet."
@@ -152,14 +152,14 @@ This replaces the entire STT → LLM → TTS pipeline with a single speech-to-sp
 
 ```python
 @function_tool
-def save_note(self, note: str) -> str:
+async def save_note(self, note: str) -> str:
     """Save a note to memory. Use this when the user asks you to remember something."""
     note_id = len(memory) + 1
     memory[note_id] = note
     return f"Saved note #{note_id}: {note}"
 ```
 
-The `@function_tool` decorator exposes a method as a tool the model can call. The docstring is important: it tells the model when and how to use the tool.
+The `@function_tool` decorator exposes a method as a tool the model can call. Note that tool functions must be `async`, even if they don't perform any asynchronous operations. The docstring is important: it tells the model when and how to use the tool.
 
 When you speak to the agent and say "Remember that my meeting is at 3pm", the model will:
 1. Recognise this as a request to save information
@@ -228,6 +228,22 @@ These nuances are largely invisible to a pipeline that converts everything to fl
 1. Make sure your docstrings clearly describe when to use each tool
 2. Try being more explicit: "Please save a note that says..."
 3. Check the agent logs to see if the model is attempting tool calls
+
+### "TypeError: object str can't be used in 'await' expression"
+
+Your tool functions need to be `async`. Make sure you have:
+
+```python
+@function_tool
+async def save_note(self, note: str) -> str:  # Note the 'async' keyword
+```
+
+Not:
+
+```python
+@function_tool
+def save_note(self, note: str) -> str:  # Missing 'async'
+```
 
 ## Stretch Goals
 
@@ -298,11 +314,11 @@ They share the same `memory` dictionary, since it's defined at module level. Use
 <details>
 <summary><strong>6. How would you add a new tool to this agent?</strong></summary>
 
-Add a new method to the `VoiceAgent` class with the `@function_tool` decorator. Include a clear docstring explaining when to use it. The method should take typed parameters and return a string result that the model can incorporate into its response.
+Add a new method to the `VoiceAgent` class with the `@function_tool` decorator. Include a clear docstring explaining when to use it. The method should be `async`, take typed parameters, and return a string result that the model can incorporate into its response.
 
 ```python
 @function_tool
-def get_time(self) -> str:
+async def get_time(self) -> str:
     """Get the current time. Use when the user asks what time it is."""
     from datetime import datetime
     return datetime.now().strftime("%H:%M")
