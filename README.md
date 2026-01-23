@@ -237,8 +237,7 @@ Now that you understand *why* we need better audio representations, the natural 
 - [WaveNet](https://deepmind.google/discover/blog/wavenet-a-generative-model-for-raw-audio/) – DeepMind's sample-by-sample audio model
 - [SoundStream](https://arxiv.org/abs/2107.03312) – First neural audio codec with RVQ
 - [Mimi](https://arxiv.org/abs/2410.00037) – Kyutai's codec used in Moshi
-- [Original article by Václav Volhejn](https://kyutai.org/blog/neural-audio-codecs)
 
 ---
 
-*Workshop materials adapted from Kyutai's neural audio codecs blog post.*
+*Workshop materials adapted from Kyutai's neural audio codecs blog post. Go and read it, it's very nice*
