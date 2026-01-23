@@ -1,325 +1,244 @@
-# Exercise 2: Realtime API and Tools
+# Exercise 3 (Bonus): Audio Representations for LLMs
 
-In Exercise 1, you built a voice agent using a pipeline of specialised models: STT → LLM → TTS. It works, but there's a cost. Every step adds latency, and something important gets lost along the way.
+**Understanding why audio needs better representations**
 
-In this exercise, we'll switch to OpenAI's Realtime API and add tool use. You'll see why this combination is such a powerful pattern for building voice-first products.
+When we want to build LLMs that truely understand and generate speech, we hit a fundamental problem: audio is *hard* to model compared to text. This workshop explores why, through hands-on PyTorch excercises.
 
-## What Gets Lost in the Pipeline
+## The Problem
 
-When speech passes through STT, it becomes text. That text captures *what* you said, but not *how* you said it.
+Text LLMs work beautifully. Take a lot of text, a big Transformer, train it to predict the next token, and you get remarkably coherent outputs.
 
-The "how" is called **prosody**:
-- Intonation (pitch rising or falling)
-- Emphasis ("I didn't say *he* stole it" vs "I didn't say he *stole* it")
-- Hesitation, pauses, rhythm
-- Emotion: excitement, frustration, uncertainty
+But try the same approach with audio and you get... nonsense.
 
-A speech-to-speech model hears all of this. When you trail off mid-sentence, uncertain, the model knows. When you ask a rhetorical question, the model can tell. This makes conversations feel remarkably more natural.
+Why? The answer lies in the *density* of information. A single second of audio contains tens of thousands of samples, but corresponds to only a few words. This creates two problems:
 
-## Why Realtime + Tools Matters
+1. **Scale**: Models struggle to maintain coherence over such long sequences
+2. **Speed**: Generating audio sample-by-sample is painfully slow
 
-Tools give an LLM the ability to take actions: look things up, save information, control systems. But in a traditional pipeline, tool use is clunky:
+This workshop will help you build intuition for these challenges through code.
 
-1. User speaks → STT → text
-2. LLM decides to call a tool → waits for result
-3. LLM generates response → TTS → audio
-4. User hears the response
-
-Each step adds latency. The pause while the tool executes feels awkward.
-
-With a realtime model, tool calls happen mid-stream. The model can acknowledge your request ("Let me check that for you..."), execute the tool, and continue speaking, all in one fluid interaction. It feels like talking to someone who's actually *doing* something, not just reciting information.
-
-This is the pattern behind the next generation of voice products: assistants that don't just talk, but act.
-
-## What You'll Build
-
-You'll update your agent to:
-1. Use the OpenAI Realtime API instead of the STT → LLM → TTS pipeline
-2. Add a simple "memory" tool that can save and recall notes
-
-The memory tool is deliberately simple. The point is to feel the difference when an agent can take actions in real-time.
-
-## Prerequisites
-
-You'll need an OpenAI API key with access to the Realtime API. Add it to your `.env.local` if you haven't already:
-
-```
-OPENAI_API_KEY=your-openai-api-key
-```
-
-## Step 1: Update Dependencies
-
-The Realtime API requires the OpenAI plugin:
+## Setup
 
 ```bash
-cd ~/livekit-voice-agent/agent
-uv add "livekit-agents[openai]~=1.3"
+pip install torch torchaudio matplotlib numpy librosa
 ```
 
-## Step 2: Update the Agent Code
+## Excercise 1: The Scale of Audio
 
-Replace the contents of `agent.py` with the following:
+Let's start by understanding just how much data we're dealing with.
 
 ```python
-from dotenv import load_dotenv
-from livekit import agents
-from livekit.agents import AgentServer, AgentSession, Agent, room_io, function_tool
-from livekit.plugins import openai, noise_cancellation
+import torch
+import torchaudio
+import matplotlib.pyplot as plt
 
-load_dotenv(".env.local")
+sample_rate = 16000
+duration_seconds = 10
 
-# Simple in-memory storage for notes
-memory = {}
+t = torch.linspace(0, duration_seconds, sample_rate * duration_seconds)
+audio = torch.sin(2 * torch.pi * 200 * t) * torch.sin(2 * torch.pi * 3 * t)
 
-
-class VoiceAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="""
-                You are a helpful assistant communicating via voice.
-                Keep your responses concise and conversational.
-                
-                You have the ability to remember things for the user.
-                When they ask you to remember something, use the save_note tool.
-                When they ask what you've saved or to recall something, use the get_notes tool.
-            """,
-        )
-
-    @function_tool
-    async def save_note(self, note: str) -> str:
-        """Save a note to memory. Use this when the user asks you to remember something."""
-        note_id = len(memory) + 1
-        memory[note_id] = note
-        return f"Saved note #{note_id}: {note}"
-
-    @function_tool
-    async def get_notes(self) -> str:
-        """Retrieve all saved notes. Use this when the user asks what you've remembered."""
-        if not memory:
-            return "No notes saved yet."
-        return "\n".join([f"#{id}: {note}" for id, note in memory.items()])
-
-
-server = AgentServer()
-
-
-@server.rtc_session()
-async def entrypoint(ctx: agents.JobContext):
-    await ctx.connect()
-
-    session = AgentSession(
-        llm=openai.realtime.RealtimeModel(
-            voice="alloy",
-            model="gpt-realtime-mini",
-        )
-    )
-
-    await session.start(
-        room=ctx.room,
-        agent=VoiceAgent(),
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=noise_cancellation.BVC(),
-            ),
-        ),
-    )
-
-    await session.generate_reply(
-        instructions="Greet the user and let them know you can remember things for them."
-    )
-
-
-if __name__ == "__main__":
-    agents.cli.run_app(server)
+print(f"Audio duration: {duration_seconds} seconds")
+print(f"Sample rate: {sample_rate} Hz")
+print(f"Total samples: {len(audio):,}")
+print(f"Samples per second: {sample_rate:,}")
 ```
 
-## Understanding the Changes
+**Question**: If this 10-second clip contains roughly 10 words of speech, how many audio samples represent each word on average?
 
-### Realtime Model
+<details>
+<summary>Answer</summary>
+
+With 160,000 samples for ~10 words, that's roughly **16,000 samples per word**. Compare this to text, where a word might be 1–3 tokens. The ratio is staggering.
+
+</details>
+
+## Excercise 2: Text vs Audio Information Density
+
+Let's make the comparision concrete.
 
 ```python
-session = AgentSession(
-    llm=openai.realtime.RealtimeModel(
-        voice="alloy",
-        model="gpt-realtime-mini",
-    )
+text = "The quick brown fox jumps over the lazy dog"
+text_chars = len(text)
+text_tokens_approx = len(text.split())
+
+words = len(text.split())
+audio_duration = words * 0.5
+audio_samples = int(audio_duration * sample_rate)
+
+print("Text representation:")
+print(f"  Characters: {text_chars}")
+print(f"  Words (≈ tokens): {text_tokens_approx}")
+
+print("\nAudio representation (16kHz):")
+print(f"  Duration: {audio_duration} seconds")
+print(f"  Samples: {audio_samples:,}")
+
+print(f"\nRatio: {audio_samples / text_tokens_approx:.0f}x more values in audio than text tokens")
+```
+
+## Excercise 3: Visualising Audio Representations
+
+Raw audio samples are just numbers. Let's see what they look like and explore richer representatons.
+
+```python
+import numpy as np
+
+sample_rate = 16000
+duration = 1.0
+t = torch.linspace(0, duration, int(sample_rate * duration))
+
+audio = (
+	0.5 * torch.sin(2 * torch.pi * 150 * t) +
+	0.3 * torch.sin(2 * torch.pi * 300 * t) +
+	0.2 * torch.sin(2 * torch.pi * 450 * t)
 )
+
+envelope = 0.5 + 0.5 * torch.sin(2 * torch.pi * 2 * t)
+audio = audio * envelope
+
+fig, axes = plt.subplots(3, 1, figsize=(12, 8))
+
+axes[0].plot(t[:1600], audio[:1600])
+axes[0].set_title("Raw Waveform (first 100ms)")
+axes[0].set_xlabel("Time (s)")
+axes[0].set_ylabel("Amplitude")
+
+axes[1].plot(t[:160], audio[:160], 'o-', markersize=2)
+axes[1].set_title("Individual Samples (first 10ms) – This is what the model sees")
+axes[1].set_xlabel("Time (s)")
+axes[1].set_ylabel("Amplitude")
+
+spectrogram = torchaudio.transforms.Spectrogram(
+	n_fft=512,
+	hop_length=128,
+	power=2
+)
+spec = spectrogram(audio.unsqueeze(0))
+axes[2].imshow(
+	torch.log(spec[0] + 1e-9), 
+	aspect='auto', 
+	origin='lower',
+	extent=[0, duration, 0, sample_rate/2]
+)
+axes[2].set_title("Spectrogram – frequency content over time")
+axes[2].set_xlabel("Time (s)")
+axes[2].set_ylabel("Frequency (Hz)")
+
+plt.tight_layout()
+plt.savefig("audio_representations.png", dpi=150)
+plt.show()
 ```
 
-This replaces the entire STT → LLM → TTS pipeline with a single speech-to-speech model. We use `gpt-realtime-mini` as it's more cost-effective for learning. The `voice` parameter controls the output voice: options include `alloy`, `coral`, `echo`, `sage`, and others.
+**Key insight**: The spectrogram reveals structure (frequency patterns) that isn't obvious from raw samples. This hints at why we need *learnt* representations that capture meaningful audio structure.
 
-### Function Tools
+## Excercise 4: The Context Window Problem
+
+LLMs have limited context windows. Let's see how this constrains audio modelling.
 
 ```python
-@function_tool
-async def save_note(self, note: str) -> str:
-    """Save a note to memory. Use this when the user asks you to remember something."""
-    note_id = len(memory) + 1
-    memory[note_id] = note
-    return f"Saved note #{note_id}: {note}"
+context_sizes = {
+	"GPT-2 small": 1024,
+	"GPT-2 medium": 2048,
+	"Modern LLMs": 8192,
+}
+
+sample_rate = 16000
+
+print("How much audio fits in different context windows?\n")
+print(f"{'Model':<20} {'Context':<10} {'Audio Duration':<15} {'Approx Words':<15}")
+print("-" * 60)
+
+for model, ctx in context_sizes.items():
+	duration_ms = (ctx / sample_rate) * 1000
+	approx_words = duration_ms / 500
+	print(f"{model:<20} {ctx:<10} {duration_ms:.0f}ms{'':<10} ~{approx_words:.1f} words")
+
+print("\n⚠️  With sample-by-sample modelling, even 8k context only covers ~0.5 seconds!")
+print("   That's not even enough for a complete sentence.")
 ```
 
-The `@function_tool` decorator exposes a method as a tool the model can call. Note that tool functions must be `async`, even if they don't perform any asynchronous operations. The docstring is important: it tells the model when and how to use the tool.
+## Excercise 5: Why Sample-by-Sample Fails
 
-When you speak to the agent and say "Remember that my meeting is at 3pm", the model will:
-1. Recognise this as a request to save information
-2. Call `save_note` with the extracted content
-3. Incorporate the result into its spoken response
-
-This all happens in a single conversational turn, with minimal latency.
-
-## Step 3: Test Your Agent
-
-Start the agent:
-
-```bash
-uv run agent.py dev
-```
-
-Start the frontend (in another terminal):
-
-```bash
-cd ~/livekit-voice-agent/frontend
-npm run dev
-```
-
-Open `http://localhost:3000` and try:
-
-- "Remember that I need to buy milk"
-- "Also remember my dentist appointment is on Friday"
-- "What have you saved for me?"
-
-Notice how the agent acknowledges each request naturally, without the awkward pauses you might expect from a tool call.
-
-## Experiencing Prosody
-
-Now that your agent is running, try these experiments to feel the difference a speech-to-speech model makes:
-
-**Interruption handling:**
-Say "Remember that... actually, never mind." Notice how the agent handles your change of intent mid-sentence. A pipeline would have already committed to saving a note.
-
-**Sarcasm:**
-Try asking "Oh great, another thing to remember" in a sarcastic tone, then try again with genuine enthusiasm. Does the agent respond differently?
-
-**Uncertainty:**
-Ask a question while trailing off: "Could you maybe... I don't know... save something for me?" Compare this to asking the same thing confidently and directly.
-
-**Emotion:**
-Tell the agent something exciting ("I just got the job!") versus something disappointing ("I didn't get the job..."). Notice how it adjusts its response.
-
-These nuances are largely invisible to a pipeline that converts everything to flat text first.
-
-## What You Should Notice
-
-1. **Lower latency**: Responses start faster because there's no STT step
-2. **More natural conversation**: The agent picks up on tone and pacing
-3. **Fluid tool use**: Saving and recalling notes feels like a natural part of the conversation
-
-## Troubleshooting
-
-### "No audio" or agent doesn't respond
-
-1. Check that your `OPENAI_API_KEY` is set in `.env.local`
-2. Verify your OpenAI account has access to the Realtime API
-3. Check the agent terminal for error messages
-
-### Tools aren't being called
-
-1. Make sure your docstrings clearly describe when to use each tool
-2. Try being more explicit: "Please save a note that says..."
-3. Check the agent logs to see if the model is attempting tool calls
-
-### "TypeError: object str can't be used in 'await' expression"
-
-Your tool functions need to be `async`. Make sure you have:
+Let's simulate what happens when a model can only "see" a tiny window of audio.
 
 ```python
-@function_tool
-async def save_note(self, note: str) -> str:  # Note the 'async' keyword
+def simulate_context_window(audio, context_size, sample_rate):
+	duration_visible = context_size / sample_rate
+	samples_visible = min(context_size, len(audio))
+	return audio[:samples_visible], duration_visible
+
+sample_rate = 16000
+full_audio = torch.randn(5 * sample_rate)
+
+context_size = 2048
+visible_audio, visible_duration = simulate_context_window(
+	full_audio, context_size, sample_rate
+)
+
+print(f"Full audio: {len(full_audio)/sample_rate:.1f} seconds ({len(full_audio):,} samples)")
+print(f"Model sees: {visible_duration*1000:.0f}ms ({len(visible_audio):,} samples)")
+print(f"Model is blind to: {100 * (1 - len(visible_audio)/len(full_audio)):.1f}% of the audio")
 ```
 
-Not:
+**The problem**: With only 128ms of context, the model can't learn that sentences have subjects and predicates, that speakers maintain consistant voices, or any other long-range patterns.
+
+## Excercise 6: The Compression Imperative
+
+To model audio effectively, we need compression. Let's explore the target compression ratios.
 
 ```python
-@function_tool
-def save_note(self, note: str) -> str:  # Missing 'async'
+def calculate_compression_needs(
+	target_context_seconds: float,
+	model_context_size: int,
+	sample_rate: int = 16000
+) -> float:
+	samples_needed = target_context_seconds * sample_rate
+	compression_ratio = samples_needed / model_context_size
+	return compression_ratio
+
+print("Compression ratios needed to fit X seconds into a 2048-token context:\n")
+
+for target_seconds in [1, 5, 10, 30, 60]:
+	ratio = calculate_compression_needs(
+		target_context_seconds=target_seconds,
+		model_context_size=2048
+	)
+	print(f"  {target_seconds:>2}s of audio → {ratio:>6.1f}x compression needed")
+
+print("\n💡 Neural audio codecs like Mimi achieve ~128x compression!")
+print("   This means 2048 tokens can represent ~16 seconds of audio.")
 ```
 
-## Stretch Goal
+## Summary
 
-**Build a prototype for your startup/employer.**
+| Representation | Samples/second | 10s audio size | Context coverage (2048 tokens) |
+|----------------|----------------|----------------|-------------------------------|
+| Raw audio (16kHz) | 16,000 | 160,000 samples | 128ms |
+| Neural codec (125 fps) | 125 | 1,250 tokens | 16s |
+| Neural codec (12.5 fps) | 12.5 | 125 tokens | 164s |
 
-You now have all the pieces. What would be genuinely useful? Some ideas:
+The path forward is clear: **we need learnt compression** that preserves the important information whilst dramaticaly reducing the sequence length.
 
-- **Personal assistant**: Calendar management, reminders, email summaries
-- **Customer service agent**: Answer FAQs, look up order status, process returns
-- **Language tutor**: Conversational practice with corrections and encouragement
-- **Interview coach**: Mock interviews with feedback on your answers
-- **Therapy companion**: Active listening, mood tracking, coping strategies
-- **Medical triage**: Symptom assessment, appointment booking, medication reminders
-- **Legal assistant**: Document explanation, deadline tracking, case research
+This is exactly what neural audio codecs like SoundStream, EnCodec, and Mimi provide. They learn to encode audio into discrete tokens that can be modelled by standard LLM architectures.
 
-Pick something you'd actually use. Change the `instructions` to give your agent a persona. Add tools that connect to real APIs. The pattern is always the same: a clear persona, tools that take actions, and a realtime model that makes it feel human.
+## Next Steps
 
-## Cost Comparison
+Now that you understand *why* we need better audio representations, the natural next steps are:
 
-The Realtime API is priced per token. Audio tokens work differently from text tokens, but here's the current pricing:
+1. **Autoencoders**: Learn to compress and reconstruct audio
+2. **Vector Quantisation**: Make the compressed representation discrete (LLM-friendly)
+3. **Residual Vector Quantisation**: Stack quantisers for better fidelity
+4. **Training audio LLMs**: Use the compressed tokens to train generative models
 
-| Model | Input | Output |
-|-------|-------|--------|
-| gpt-realtime | $32.00 / 1M tokens | $64.00 / 1M tokens |
-| gpt-realtime-mini | $10.00 / 1M tokens | $20.00 / 1M tokens |
+## Refferences
 
-For comparison, a pipeline using GPT-4.1 mini with separate STT and TTS is roughly 10x cheaper per minute of conversation. The tradeoff is user experience: for products where conversation quality matters (customer service, therapy apps, companionship) the cost is often worth it.
+- [The Unreasonable Effectiveness of RNNs](http://karpathy.github.io/2015/05/21/rnn-effectiveness/) – Karpathy's 2015 post
+- [WaveNet](https://deepmind.google/discover/blog/wavenet-a-generative-model-for-raw-audio/) – DeepMind's sample-by-sample audio model
+- [SoundStream](https://arxiv.org/abs/2107.03312) – First neural audio codec with RVQ
+- [Mimi](https://arxiv.org/abs/2410.00037) – Kyutai's codec used in Moshi
+- [Original article by Václav Volhejn](https://kyutai.org/blog/neural-audio-codecs)
 
-## Quiz Questions
+---
 
-<details>
-<summary><strong>1. Why does the Realtime API feel more natural than a pipeline?</strong></summary>
-
-The Realtime API processes speech directly without converting to text first. This preserves prosodic information (tone, emphasis, hesitation, emotion) that gets lost in STT transcription. The model understands not just what you said, but how you said it.
-
-</details>
-
-<details>
-<summary><strong>2. What makes tool use different with the Realtime API?</strong></summary>
-
-With a pipeline, tool calls create noticeable pauses: the system must wait for STT, then LLM processing, then the tool, then TTS. With the Realtime API, tool calls happen mid-stream. The model can speak while waiting for results, or incorporate results immediately. The interaction feels continuous rather than turn-based.
-
-</details>
-
-<details>
-<summary><strong>3. Why is the docstring important for function tools?</strong></summary>
-
-The docstring tells the model when to use the tool and what it does. The model reads this description to decide whether a tool is appropriate for the user's request. A clear, specific docstring leads to better tool selection.
-
-</details>
-
-<details>
-<summary><strong>4. What happens to the saved notes when the agent restarts?</strong></summary>
-
-They're lost. The `memory` dictionary exists only in the Python process's memory. For persistence, you'd need to store notes in a database or file. This is intentional for the exercise: it keeps the code simple while demonstrating the tool pattern.
-
-</details>
-
-<details>
-<summary><strong>5. What happens if two users connect at the same time?</strong></summary>
-
-They share the same `memory` dictionary, since it's defined at module level. User A could save a note and User B could retrieve it. In a production system, you'd scope memory per session or per user, perhaps using `ctx.room.name` as a key.
-
-</details>
-
-<details>
-<summary><strong>6. How would you add a new tool to this agent?</strong></summary>
-
-Add a new method to the `VoiceAgent` class with the `@function_tool` decorator. Include a clear docstring explaining when to use it. The method should be `async`, take typed parameters, and return a string result that the model can incorporate into its response.
-
-```python
-@function_tool
-async def get_time(self) -> str:
-    """Get the current time. Use when the user asks what time it is."""
-    from datetime import datetime
-    return datetime.now().strftime("%H:%M")
-```
-
-</details>
+*Workshop materials adapted from Kyutai's neural audio codecs blog post.*
