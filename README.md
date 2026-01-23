@@ -7,7 +7,7 @@ Learn to build MCP servers by extending Claude's capabilities.
 2. **[Exercise 2: Realtime API and Tools](https://github.com/izaakrogan/fac-voice-agent/tree/exercise-2)** - Build a prototype for your startup or employer
 
 ## Bonus
-- **[Exercise 3: Audio Representations for LLMs](https://github.com/izaakrogan/fac-mcp/tree/exercise-3)** - audio is hard to model compared to text. This readme explores why.
+- **[Exercise 3: Audio Representations for LLMs](https://github.com/izaakrogan/fac-mcp/tree/exercise-3)** - audio is hard to model compared to text. This exercise explores why.
 
 ## Getting Started
 ```bash
