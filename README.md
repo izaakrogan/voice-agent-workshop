@@ -382,3 +382,43 @@ These models are accessed through **LiveKit Inference**, which is built into Liv
 It registers the function as the handler for new WebRTC sessions. When a user connects through the frontend, LiveKit Cloud notifies your agent server, which then calls this decorated function to set up a new `AgentSession` for that user. Each user gets their own session with its own conversation state.
 
 </details>
+<details>
+<summary><strong>8. What is the purpose of `noise_cancellation.BVC()` in the audio input options, and why is it important for voice agents?</strong></summary>
+
+**BVC (Background Voice Cancellation)** removes background noise from the user's microphone input before it reaches the speech-to-text system. This is important because:
+
+- **Improves STT accuracy**: Background noise (traffic, typing, other people talking) can confuse the speech recognition
+- **Better user experience**: The agent can understand users even in noisy environments like coffee shops or open offices
+- **Reduces false triggers**: VAD can more accurately detect when the user is actually speaking vs ambient noise
+
+Without it, the agent might mishear words or respond to background conversations.
+
+</details>
+<details>
+<summary><strong>9. Why do we need to run `uv run agent.py download-files` before starting the agent? What would happen if we skipped this step?</strong></summary>
+
+This command downloads the **model files** for VAD (Voice Activity Detection) and turn detection. These are machine learning models that need to be stored locally:
+
+- **Silero VAD model**: Detects when speech is present in audio
+- **Multilingual turn detection model**: Determines when the user has finished speaking
+
+**If you skip this step**: The agent would crash when trying to load these models, showing "model file not found" errors. The plugins need these pre-trained neural network weights to function.
+
+The models are downloaded once and cached in `~/.cache/huggingface/` for future use.
+
+</details>
+<details>
+<summary><strong>10. In the code, what does `await session.generate_reply(instructions="Greet the user and offer your assistance.")` do, and when does it execute?</strong></summary>
+
+This line makes the agent **proactively speak first** without waiting for the user to say anything. It:
+
+1. **Executes immediately** after the session starts and the user connects
+2. **Sends instructions to the LLM** to generate a greeting
+3. **Synthesizes the response to speech** via TTS
+4. **Plays it to the user** through their browser
+
+**Without this line**: The agent would sit silently waiting for the user to speak first, which creates an awkward experience. The greeting lets users know the agent is ready and listening.
+
+It's essentially "agent-initiated conversation" rather than purely reactive responses.
+
+</details>
