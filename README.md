@@ -245,13 +245,11 @@ Not:
 def save_note(self, note: str) -> str:  # Missing 'async'
 ```
 
-## Stretch Goals
+## Stretch Goal
 
-**Add a `clear_notes` tool:**
-Let users delete all their saved notes with a voice command.
+**Build a prototype for your startup/employer.**
 
-**Build your own agent:**
-You now have all the pieces. What would *you* build? Some ideas:
+You now have all the pieces. What would be genuinely useful? Some ideas:
 
 - **Personal assistant**: Calendar management, reminders, email summaries
 - **Customer service agent**: Answer FAQs, look up order status, process returns
