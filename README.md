@@ -1,5 +1,7 @@
 # Exercise 2: Realtime API and Tools
 
+If you have questions, come and talk to me.
+
 In Exercise 1, you built a voice agent using a pipeline of specialised models: STT → LLM → TTS. It works, but there's a cost. Every step adds latency, and something important gets lost along the way.
 
 In this exercise, we'll switch to OpenAI's Realtime API and add tool use. You'll see why this combination is such a powerful pattern for building voice-first products.
@@ -14,7 +16,7 @@ The "how" is called **prosody**:
 - Hesitation, pauses, rhythm
 - Emotion: excitement, frustration, uncertainty
 
-A speech-to-speech model hears all of this. When you trail off mid-sentence, uncertain, the model knows. When you ask a rhetorical question, the model can tell. This makes conversations feel remarkably more natural.
+A speech-to-speech model receives all of this as input. This means trailing off mid-sentence, rhetorical questions, and other vocal cues can influence the response, making conversations feel more natural.
 
 ## Why Realtime + Tools Matters
 
@@ -27,9 +29,9 @@ Tools give an LLM the ability to take actions: look things up, save information,
 
 Each step adds latency. The pause while the tool executes feels awkward.
 
-With a realtime model, tool calls happen mid-stream. The model can acknowledge your request ("Let me check that for you..."), execute the tool, and continue speaking, all in one fluid interaction. It feels like talking to someone who's actually *doing* something, not just reciting information.
+With a realtime model, tool calls happen mid-stream. The model can acknowledge your request ("Let me check that for you..."), execute the tool, and continue speaking, all in one fluid interaction. The interaction feels continuous rather than stop-and-start.
 
-This is the pattern behind the next generation of voice products: assistants that don't just talk, but act.
+This is the pattern behind the next generation of voice products: assistants that can take actions, not just respond.
 
 ## What You'll Build
 
@@ -37,7 +39,7 @@ You'll update your agent to:
 1. Use the OpenAI Realtime API instead of the STT → LLM → TTS pipeline
 2. Add a simple "memory" tool that can save and recall notes
 
-The memory tool is deliberately simple. The point is to feel the difference when an agent can take actions in real-time.
+The memory tool is deliberately simple. The point is to see the difference when an agent can take actions during a conversation.
 
 ## Prerequisites
 
@@ -207,7 +209,7 @@ Ask a question while trailing off: "Could you maybe... I don't know... save some
 **Emotion:**
 Tell the agent something exciting ("I just got the job!") versus something disappointing ("I didn't get the job..."). Notice how it adjusts its response.
 
-These nuances are largely invisible to a pipeline that converts everything to flat text first.
+These nuances are lost when a pipeline converts everything to flat text first.
 
 ## What You Should Notice
 
@@ -259,7 +261,7 @@ You now have all the pieces. What would be genuinely useful? Some ideas:
 - **Medical triage**: Symptom assessment, appointment booking, medication reminders
 - **Legal assistant**: Document explanation, deadline tracking, case research
 
-Pick something you'd actually use. Change the `instructions` to give your agent a persona. Add tools that connect to real APIs. The pattern is always the same: a clear persona, tools that take actions, and a realtime model that makes it feel human.
+Pick something you'd actually use. Change the `instructions` to give your agent a persona. Add tools that connect to real APIs. The pattern is always the same: a clear persona, tools that take actions, and a realtime model for low-latency conversation.
 
 ## Cost Comparison
 
@@ -277,7 +279,7 @@ For comparison, a pipeline using GPT-4.1 mini with separate STT and TTS is rough
 <details>
 <summary><strong>1. Why does the Realtime API feel more natural than a pipeline?</strong></summary>
 
-The Realtime API processes speech directly without converting to text first. This preserves prosodic information (tone, emphasis, hesitation, emotion) that gets lost in STT transcription. The model understands not just what you said, but how you said it.
+The Realtime API processes speech directly without converting to text first. This preserves prosodic information (tone, emphasis, hesitation, emotion) that gets lost in STT transcription. The model receives the raw audio, so prosodic information (tone, emphasis, hesitation) is preserved.
 
 </details>
 
